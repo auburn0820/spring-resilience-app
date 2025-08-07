@@ -1,0 +1,220 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: spring-resilience-app
+
+logging:
+  level:
+    com.example.springresilienceapp: INFO
+    io.github.resilience4j: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  health:
+    circuitbreakers:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers,retries,bulkheads
+  endpoint:
+    health:
+      show-details: always
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 50
+        slow-call-duration-threshold: 1000ms
+        minimum-number-of-calls: 5
+        sliding-window-size: 10
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+      
+      # 핵심 내부 서비스용 - 매우 엄격
+      strict:
+        failure-rate-threshold: 15
+        slow-call-rate-threshold: 30
+        slow-call-duration-threshold: 500ms
+        minimum-number-of-calls: 3
+        sliding-window-size: 8
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+      
+      # 외부 서비스용 - 보수적
+      external:
+        failure-rate-threshold: 60
+        slow-call-rate-threshold: 70
+        slow-call-duration-threshold: 2000ms
+        minimum-number-of-calls: 8
+        sliding-window-size: 20
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 5
+      
+      # 중요하지 않은 서비스용 - 관대
+      lenient:
+        failure-rate-threshold: 80
+        slow-call-rate-threshold: 80
+        slow-call-duration-threshold: 3000ms
+        minimum-number-of-calls: 10
+        sliding-window-size: 15
+        wait-duration-in-open-state: 120s
+        permitted-number-of-calls-in-half-open-state: 8
+    
+    instances:
+      # 1. 핵심 사용자 서비스 - 가장 엄격한 설정
+      core-user-service:
+        base-config: strict
+        failure-rate-threshold: 15  # 15% 실패시 바로 차단
+        wait-duration-in-open-state: 5s
+      
+      # 2. 결제 게이트웨이 - 보수적 설정 (외부 서비스)  
+      payment-gateway:
+        base-config: external
+        failure-rate-threshold: 70  # 70% 실패까지 허용
+        wait-duration-in-open-state: 30s
+      
+      # 3. Redis 캐시 - 빠른 복구
+      redis-cache:
+        base-config: default
+        failure-rate-threshold: 40
+        wait-duration-in-open-state: 5s
+        slow-call-duration-threshold: 200ms
+      
+      # 4. 써드파티 API - 매우 까다로운 설정
+      third-party-api:
+        base-config: external
+        failure-rate-threshold: 30  # 30% 실패시 차단
+        wait-duration-in-open-state: 90s
+        slow-call-duration-threshold: 3000ms
+      
+      # 5. 재고 서비스 - 중간 설정
+      inventory-service:
+        base-config: default
+        failure-rate-threshold: 35
+        wait-duration-in-open-state: 20s
+      
+      # 6. 알림 서비스 - 실패해도 괜찮음
+      notification-service:
+        base-config: lenient
+        failure-rate-threshold: 75
+        wait-duration-in-open-state: 60s
+      
+      # 7. 로그 서비스 - 가장 관대한 설정
+      log-service:
+        base-config: lenient
+        failure-rate-threshold: 90  # 90% 실패까지 허용
+        wait-duration-in-open-state: 300s
+        minimum-number-of-calls: 20
+  
+  retry:
+    configs:
+      default:
+        max-attempts: 3
+        wait-duration: 500ms
+        retry-exceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+          - java.io.IOException
+          - java.lang.RuntimeException
+        ignore-exceptions:
+          - java.lang.IllegalArgumentException
+      
+      # 핵심 서비스용 - 적극적 재시도
+      aggressive:
+        max-attempts: 5
+        wait-duration: 200ms
+        retry-exceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+          - java.io.IOException
+          - java.lang.RuntimeException
+      
+      # 외부 서비스용 - 신중한 재시도
+      conservative:
+        max-attempts: 2
+        wait-duration: 1500ms
+        retry-exceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+    
+    instances:
+      core-user-service:
+        base-config: aggressive
+        max-attempts: 5
+        wait-duration: 100ms
+      
+      payment-gateway:
+        base-config: conservative
+        max-attempts: 3
+        wait-duration: 2s
+      
+      redis-cache:
+        base-config: default
+        max-attempts: 2
+        wait-duration: 50ms
+      
+      third-party-api:
+        base-config: conservative
+        max-attempts: 2
+        wait-duration: 3s
+      
+      inventory-service:
+        base-config: default
+        max-attempts: 3
+        wait-duration: 400ms
+      
+      notification-service:
+        base-config: default
+        max-attempts: 2
+        wait-duration: 200ms
+      
+      log-service:
+        base-config: default
+        max-attempts: 1  # 로그는 재시도 안함
+        wait-duration: 100ms
+
+  bulkhead:
+    configs:
+      default:
+        max-concurrent-calls: 10
+        max-wait-duration: 1000ms
+    instances:
+      core-user-service:
+        base-config: default
+        max-concurrent-calls: 8
+        max-wait-duration: 2000ms
+      payment-gateway:
+        base-config: default
+        max-concurrent-calls: 5
+      notification-service:
+        base-config: default
+        max-concurrent-calls: 15
+      third-party-api:
+        base-config: default
+        max-concurrent-calls: 3
+
+  thread-pool-bulkhead:
+    configs:
+      default:
+        core-thread-pool-size: 2
+        max-thread-pool-size: 5
+        queue-capacity: 20
+        keep-alive-duration: 20s
+    instances:
+      payment-gateway:
+        base-config: default
+        core-thread-pool-size: 3
+        max-thread-pool-size: 10
+        queue-capacity: 100
+      third-party-api:
+        base-config: default
+        core-thread-pool-size: 2
+        max-thread-pool-size: 6
+        queue-capacity: 50
